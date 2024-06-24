@@ -1,0 +1,18 @@
+# Ignorar entornos virtuales
+venv/
+__pycache__/
+*.pyc
+
+# Ignorar archivos de configuración sensibles
+.env
+
+# Ignorar archivos temporales y de sistema
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+# Ignorar configuraciones específicas del entorno de desarrollo
+.vscode/
+.idea/
+*.iml

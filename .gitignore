@@ -1,0 +1,25 @@
+# Entornos virtuales
+venv/
+ambientes/
+__pycache__/
+*.pyc
+
+# Archivos de configuración sensibles
+.env
+
+# Archivos temporales y de sistema
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+
+# Configuraciones del entorno de desarrollo
+.vscode/
+.idea/
+*.iml
+.env
+
+# Archivos de Docker
+**/Dockerfile
+**/docker-compose.yml

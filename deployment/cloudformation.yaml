@@ -1,0 +1,344 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-rt"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref RouteTable
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5006
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: project-root-qs
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/project-root-qs
+      RetentionInDays: 7
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ecsTaskExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                  - s3:GetObject
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: "*"
+  ECSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ecs-execution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetAuthorizationToken
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - s3:GetObject
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: "*"
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: project-root-qs-task
+      Cpu: 256
+      Memory: 512
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSRole.Arn
+      TaskRoleArn: !GetAtt ECSRole.Arn
+      ContainerDefinitions:
+        - Name: indexar_movies
+          Image: 471112756729.dkr.ecr.us-east-1.amazonaws.com/indexar_movies:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5006
+          Environment:
+            - Name: OPENAI_API_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:OPENAI_API_KEY}}'
+            - Name: OPENAI_MODEL
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:OPENAI_MODEL}}'
+            - Name: MODEL
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:MODEL}}'
+            - Name: DB_HOST
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_HOST}}'
+            - Name: DB_PORT
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_PORT}}'
+            - Name: DB_NAME
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_NAME}}'
+            - Name: DB_USER
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_USER}}'
+            - Name: DB_PASSWORD
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_PASSWORD}}'
+            - Name: FILE_PATH
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:FILE_PATH}}'
+            - Name: SECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:SECRET_KEY}}'
+            - Name: TEXTSECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TEXTSECRET_KEY}}'
+            - Name: WTF_CSRF_ENABLED
+              Value: "false"
+            - Name: TRUSTDOMAIN_1
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_1}}'
+            - Name: TRUSTDOMAIN_2
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_2}}'
+            - Name: TRUSTDOMAIN_3
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_3}}'
+            - Name: TRUSTDOMAIN_4
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_4}}'
+            - Name: TRUSTDOMAIN_5
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_5}}'
+            - Name: TRUSTDOMAIN_6
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_6}}'
+            - Name: FLASK_ENV
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:FLASK_ENV}}'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/project-root-qs
+              awslogs-region: us-east-1
+              awslogs-stream-prefix: ecs
+        - Name: mejorar_pregunta
+          Image: 471112756729.dkr.ecr.us-east-1.amazonaws.com/mejorar_pregunta:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5001
+          Environment:
+            - Name: OPENAI_API_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:OPENAI_API_KEY}}'
+            - Name: MODEL
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:MODEL}}'
+            - Name: SECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:SECRET_KEY}}'
+            - Name: WTF_CSRF_ENABLED
+              Value: "false"
+            - Name: TRUSTDOMAIN_1
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_1}}'
+            - Name: FLASK_ENV
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:FLASK_ENV}}'
+            - Name: TEXTSECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TEXTSECRET_KEY}}'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/project-root-qs
+              awslogs-region: us-east-1
+              awslogs-stream-prefix: ecs
+        - Name: obtener_embedding
+          Image: 471112756729.dkr.ecr.us-east-1.amazonaws.com/obtener_embedding:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5002
+          Environment:
+            - Name: OPENAI_API_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:OPENAI_API_KEY}}'
+            - Name: OPENAI_MODEL
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:OPENAI_MODEL}}'
+            - Name: SECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:SECRET_KEY}}'
+            - Name: WTF_CSRF_ENABLED
+              Value: "false"
+            - Name: TRUSTDOMAIN_2
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_2}}'
+            - Name: FLASK_ENV
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:FLASK_ENV}}'
+            - Name: TEXTSECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TEXTSECRET_KEY}}'
+          LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: /ecs/project-root-qs
+                awslogs-region: us-east-1
+                awslogs-stream-prefix: ecs
+        - Name: normalizar_embeddings
+          Image: 471112756729.dkr.ecr.us-east-1.amazonaws.com/normalizar_embeddings:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5003
+          Environment:
+            - Name: SECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:SECRET_KEY}}'
+            - Name: WTF_CSRF_ENABLED
+              Value: "false"
+            - Name: TRUSTDOMAIN_3
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_3}}'
+            - Name: FLASK_ENV
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:FLASK_ENV}}'
+            - Name: TEXTSECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TEXTSECRET_KEY}}'
+          LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: /ecs/project-root-qs
+                awslogs-region: us-east-1
+                awslogs-stream-prefix: ecs
+        - Name: recuperar_embeddings
+          Image: 471112756729.dkr.ecr.us-east-1.amazonaws.com/recuperar_embeddings:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5004
+          Environment:
+            - Name: DB_HOST
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_HOST}}'
+            - Name: DB_PORT
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_PORT}}'
+            - Name: DB_NAME
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_NAME}}'
+            - Name: DB_USER
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_USER}}'
+            - Name: DB_PASSWORD
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:DB_PASSWORD}}'
+            - Name: SECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:SECRET_KEY}}'
+            - Name: WTF_CSRF_ENABLED
+              Value: "false"
+            - Name: TRUSTDOMAIN_4
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_4}}'
+            - Name: FLASK_ENV
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:FLASK_ENV}}'
+            - Name: TEXTSECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TEXTSECRET_KEY}}'
+          LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: /ecs/project-root-qs
+                awslogs-region: us-east-1
+                awslogs-stream-prefix: ecs
+        - Name: generar_respuesta
+          Image: 471112756729.dkr.ecr.us-east-1.amazonaws.com/generar_respuesta:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5005
+          Environment:
+            - Name: OPENAI_API_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:OPENAI_API_KEY}}'
+            - Name: SECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:SECRET_KEY}}'
+            - Name: WTF_CSRF_ENABLED
+              Value: "false"
+            - Name: TRUSTDOMAIN_5
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TRUSTDOMAIN_5}}'
+            - Name: FLASK_ENV
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:FLASK_ENV}}'
+            - Name: TEXTSECRET_KEY
+              Value: !Sub '{{resolve:secretsmanager:.env:SecretString:TEXTSECRET_KEY}}'
+          LogConfiguration:
+              LogDriver: awslogs
+              Options:
+                awslogs-group: /ecs/project-root-qs
+                awslogs-region: us-east-1
+                awslogs-stream-prefix: ecs
+  Service:
+      Type: AWS::ECS::Service
+      Properties:
+        Cluster: !Ref ECSCluster
+        DesiredCount: 1
+        LaunchType: FARGATE
+        TaskDefinition: !Ref TaskDefinition
+        NetworkConfiguration:
+          AwsvpcConfiguration:
+            AssignPublicIp: ENABLED
+            Subnets:
+              - !Ref PublicSubnet
+            SecurityGroups:
+              - !Ref SecurityGroup
